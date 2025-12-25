@@ -20,8 +20,8 @@ import Card from "./components/Card";
 import PaymentStatus from "./components/PaymentStatus";
 import "./App.css";
 
-// Backend URL - in production, this would come from environment
-const BACKEND_URL = "http://localhost:3000";
+// Backend URL - from environment variable or default to localhost
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
 
 // Hardcoded customer ID for POC (matches backend)
 const CUSTOMER_ID = "poc_user_001";

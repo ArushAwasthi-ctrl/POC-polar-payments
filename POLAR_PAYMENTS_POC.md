@@ -177,6 +177,17 @@ Why it's right:
 | CORS configuration | ✅ Done | `index.ts` |
 | Health check endpoint | ✅ Done | `index.ts` |
 
+### Purchase Tracking & Payment Status (NEW)
+
+| Step | Status | Details |
+|------|--------|---------|
+| In-memory purchase store | ✅ Done | `billing.service.ts` - Tracks purchases per customer |
+| Record purchases on webhook | ✅ Done | `billing.webhook.ts` - Records on `subscription.active` and `order.paid` |
+| Purchases API endpoint | ✅ Done | `GET /purchases/:customerId` in `index.ts` |
+| Payment status redirect URLs | ✅ Done | `billing.rpc.ts` - Includes `?status=success&plan=pro` |
+| Payment status page | ✅ Done | `PaymentStatus.tsx` - Shows success/cancelled/error |
+| Disable purchased products | ✅ Done | `App.tsx` - Fetches purchases and disables bought plans |
+
 ---
 
 ## Step-by-Step Breakdown
@@ -287,11 +298,11 @@ backend/
 ├── package.json
 ├── tsconfig.json
 └── src/
-    ├── index.ts            # Server entry point
+    ├── index.ts            # Server entry point + /purchases endpoint
     └── billing/
         ├── polar.client.ts     # Polar SDK initialization
         ├── billing.plan.ts     # Plan ID validation
-        ├── billing.service.ts  # Business logic (where DB calls go)
+        ├── billing.service.ts  # Business logic + purchase store
         └── billing.webhook.ts  # Webhook handler
     └── rpc/
         └── billing.rpc.ts      # Checkout endpoint handler
@@ -299,11 +310,124 @@ backend/
 frontend/
 ├── package.json
 └── src/
-    ├── App.tsx             # Main app with checkout logic
+    ├── App.tsx             # Main app with checkout logic + purchase checking
     └── components/
-        ├── Card.tsx        # Product cards with Buy button
+        ├── Card.tsx        # Product cards with Buy/Purchased button
         ├── Header.tsx
-        └── Footer.tsx
+        ├── Footer.tsx
+        └── PaymentStatus.tsx   # Success/cancelled/error page
+```
+
+---
+
+## Purchase Tracking & Payment Status
+
+### How It Works
+
+After a successful payment, we need to:
+1. **Prevent duplicate purchases** - Users shouldn't buy the same product twice
+2. **Show payment feedback** - Clear success/cancelled/error messages
+
+### Purchase Tracking Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         PURCHASE TRACKING FLOW                                │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. User completes payment on Polar                                          │
+│                    ↓                                                         │
+│  2. Polar sends webhook to backend                                           │
+│     Event: subscription.active or order.paid                                 │
+│                    ↓                                                         │
+│  3. Backend records purchase in store                                        │
+│     recordPurchase(customerId, productId, orderId)                          │
+│                    ↓                                                         │
+│  4. Frontend fetches purchases on load                                       │
+│     GET /purchases/poc_user_001                                              │
+│     Returns: { purchasedPlans: ["pro"] }                                     │
+│                    ↓                                                         │
+│  5. Frontend disables "Buy" button for purchased plans                       │
+│     Shows "Purchased" instead of "Buy"                                       │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Payment Status Redirect
+
+When creating a checkout, we include status info in the redirect URLs:
+
+```typescript
+// billing.rpc.ts
+const session = await polar.checkouts.create({
+  products: [productId],
+  successUrl: `${baseUrl}/payment?status=success&plan=${planId}`,
+  returnUrl: `${baseUrl}/payment?status=cancelled&plan=${planId}`,
+});
+```
+
+The frontend reads these URL parameters and shows the appropriate message:
+- **success**: "Payment Successful! Your access has been activated."
+- **cancelled**: "Payment Cancelled. No payment was made."
+- **error**: "Something went wrong while processing your payment."
+
+### Backend Purchase Store (POC)
+
+For this POC, purchases are stored in-memory:
+
+```typescript
+// billing.service.ts
+const purchaseStore = new Map<string, Purchase[]>();
+
+// Record a purchase
+export function recordPurchase(customerId, productId, orderId) {
+  // ... stores in memory
+}
+
+// Get purchased plan IDs
+export function getPurchasedPlanIds(customerId): PlanId[] {
+  // ... returns ["pro", "master"] etc.
+}
+```
+
+**In production**, replace with database calls:
+```typescript
+// Example with database
+export async function recordPurchase(customerId, productId, orderId) {
+  await db.purchases.create({
+    customerId,
+    productId,
+    orderId,
+    status: 'active',
+    createdAt: new Date()
+  });
+}
+```
+
+### Frontend Purchase Checking
+
+On page load, the frontend fetches purchased plans:
+
+```typescript
+// App.tsx
+useEffect(() => {
+  async function loadPurchases() {
+    const response = await fetch(`${BACKEND_URL}/purchases/${CUSTOMER_ID}`);
+    const data = await response.json();
+    setPurchasedPlans(data.purchasedPlans);
+  }
+  loadPurchases();
+}, []);
+```
+
+Cards show "Purchased" and disable the button for owned plans:
+
+```tsx
+<Card
+  title="Pro Plan"
+  isPurchased={purchasedPlans.includes("pro")}
+  onBuy={() => handleBuy("pro")}
+/>
 ```
 
 ---
@@ -664,14 +788,27 @@ This POC demonstrates a **production-correct** billing integration pattern:
 2. **Backend creates checkouts** - Controls what purchases are allowed
 3. **Webhooks verify payments** - Cryptographic proof, not trust
 4. **Signature verification** - Prevents fake webhook attacks
+5. **Purchase tracking** - Prevents duplicate purchases
+6. **Payment status feedback** - Clear success/cancelled/error messages
 
 The code is minimal but follows all security best practices. To evolve this into production:
 
-1. Add a database to persist subscription state
-2. Link Polar customer IDs to your user accounts
+1. Add a database to persist subscription state (replace in-memory store)
+2. Link Polar customer IDs to your user accounts (replace hardcoded `poc_user_001`)
 3. Add feature gating based on subscription status
 4. Add error handling and monitoring
 5. Switch from sandbox to production credentials
+6. Add proper routing (React Router) instead of URL-based routing
+
+### New Features Added
+
+| Feature | What It Does |
+|---------|--------------|
+| **In-memory purchase store** | Tracks which customers bought which plans |
+| **Purchase recording** | Webhook handler records purchases on `subscription.active` and `order.paid` |
+| **Purchases API** | `GET /purchases/:customerId` returns list of purchased plan IDs |
+| **Payment status page** | Shows success/cancelled/error with plan name after checkout |
+| **Duplicate purchase prevention** | "Buy" button disabled and shows "Purchased" for owned plans |
 
 ---
 

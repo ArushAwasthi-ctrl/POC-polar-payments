@@ -1,30 +1,141 @@
-// src/billing/billing.service.ts
-// ===============================
-// This is the "business logic" layer for billing.
-//
-// WHY SEPARATE THIS FROM WEBHOOKS?
-// --------------------------------
-// 1. Separation of concerns: Webhooks handle HTTP, this handles business logic
-// 2. Testability: You can test this without mocking HTTP
-// 3. Reusability: Other parts of your app can call these functions
-//
-// IN A REAL APP, THIS WOULD:
-// - Update a database (e.g., user.subscription_status = 'active')
-// - Enable/disable feature flags
-// - Send emails or notifications
-// - Sync with other services
-//
-// FOR THIS POC:
-// - We just log to console
-// - This shows WHERE database calls would go
+import type { PlanId } from "./billing.plan.js";
+
+// this is the business logic layer of billing it is seperated from webhooks for reusability testability and clean codebase
+// in our app this will update db enable/disable feature flags send emails or notifications maybe or sync with other services
+
+// ============================================
+// IN-MEMORY PURCHASE STORE (POC only)
+// In production, this would be a database
+// ============================================
+
+interface Purchase {
+  oderId: string;
+  customerId: string;
+  productId: string;
+  planId: PlanId;
+  purchasedAt: Date;
+  status: "active" | "canceled" | "revoked";
+}
+
+// Map: customerId -> array of purchases
+const purchaseStore = new Map<string, Purchase[]>();
+
+// Map: productId -> planId (for reverse lookup)
+const productToPlanMap = new Map<string, PlanId>();
+
+// Initialize product to plan mapping from environment
+export function initProductPlanMapping(): void {
+  const proProductId = process.env.POLAR_PRO_PRODUCT_ID;
+  const masterProductId = process.env.POLAR_MASTER_PRODUCT_ID;
+
+  if (proProductId) {
+    productToPlanMap.set(proProductId, "pro");
+  }
+  if (masterProductId) {
+    productToPlanMap.set(masterProductId, "master");
+  }
+}
+
+/**
+ * Records a purchase for a customer.
+ * Called when subscription becomes active or order is paid.
+ */
+export function recordPurchase(
+  customerId: string,
+  productId: string,
+  orderId: string
+): void {
+  const planId = productToPlanMap.get(productId);
+
+  if (!planId) {
+    console.warn(`[PURCHASE] Unknown product ID: ${productId}`);
+    return;
+  }
+
+  const purchase: Purchase = {
+    oderId: orderId,
+    customerId,
+    productId,
+    planId,
+    purchasedAt: new Date(),
+    status: "active",
+  };
+
+  const existingPurchases = purchaseStore.get(customerId) || [];
+
+  // Check if already purchased this plan
+  const alreadyPurchased = existingPurchases.some(
+    (p) => p.planId === planId && p.status === "active"
+  );
+
+  if (alreadyPurchased) {
+    console.log(`[PURCHASE] Customer ${customerId} already owns ${planId} plan`);
+    return;
+  }
+
+  existingPurchases.push(purchase);
+  purchaseStore.set(customerId, existingPurchases);
+
+  console.log(`[PURCHASE] Recorded: ${customerId} purchased ${planId} plan`);
+}
+
+/**
+ * Gets all purchases for a customer.
+ */
+export function getCustomerPurchases(customerId: string): Purchase[] {
+  return purchaseStore.get(customerId) || [];
+}
+
+/**
+ * Gets the plan IDs that a customer has already purchased.
+ */
+export function getPurchasedPlanIds(customerId: string): PlanId[] {
+  const purchases = purchaseStore.get(customerId) || [];
+  return purchases
+    .filter((p) => p.status === "active")
+    .map((p) => p.planId);
+}
+
+/**
+ * Checks if a customer has already purchased a specific plan.
+ */
+export function hasPurchasedPlan(customerId: string, planId: PlanId): boolean {
+  const purchases = purchaseStore.get(customerId) || [];
+  return purchases.some((p) => p.planId === planId && p.status === "active");
+}
+
+/**
+ * Revokes/cancels a purchase (for refunds, fraud, etc.)
+ */
+export function revokePurchase(customerId: string, planId: PlanId): void {
+  const purchases = purchaseStore.get(customerId) || [];
+  const purchase = purchases.find(
+    (p) => p.planId === planId && p.status === "active"
+  );
+
+  if (purchase) {
+    purchase.status = "revoked";
+    console.log(`[PURCHASE] Revoked: ${customerId}'s ${planId} plan`);
+  }
+}
 
 /**
  * Called when a subscription becomes active.
  * This is THE moment to grant the user access to paid features.
  *
  * @param customerId - The Polar customer ID (maps to your user)
+ * @param productId - The Polar product ID
+ * @param subscriptionId - The subscription ID (used as order ID)
  */
-export function onSubscriptionActive(customerId: string): void {
+export function onSubscriptionActive(
+  customerId: string,
+  productId?: string,
+  subscriptionId?: string
+): void {
+  // Record the purchase
+  if (productId && subscriptionId) {
+    recordPurchase(customerId, productId, subscriptionId);
+  }
   console.log("\n╔════════════════════════════════════════════╗");
   console.log("║  🎉 SUBSCRIPTION ACTIVATED                 ║");
   console.log("╠════════════════════════════════════════════╣");

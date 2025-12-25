@@ -4,15 +4,26 @@ interface CardProps {
   image: string
   title?: string
   onBuy?: () => void
+  isPurchased?: boolean
+  isLoading?: boolean
 }
 
-function Card({ image, title, onBuy }: CardProps) {
+function Card({ image, title, onBuy, isPurchased = false, isLoading = false }: CardProps) {
+  const buttonDisabled = isPurchased || isLoading;
+
   return (
     <div style={styles.card}>
       <img src={image} alt={title || 'Product'} style={styles.image} />
       {title && <h3 style={styles.title}>{title}</h3>}
-      <button style={styles.button} onClick={onBuy}>
-        Buy
+      <button
+        style={{
+          ...styles.button,
+          ...(buttonDisabled ? styles.buttonDisabled : {}),
+        }}
+        onClick={onBuy}
+        disabled={buttonDisabled}
+      >
+        {isLoading ? 'Loading...' : isPurchased ? 'Purchased' : 'Buy'}
       </button>
     </div>
   )
@@ -49,6 +60,10 @@ const styles: { [key: string]: React.CSSProperties } = {
     cursor: 'pointer',
     fontSize: '16px',
     fontWeight: 500,
+  },
+  buttonDisabled: {
+    backgroundColor: '#9e9e9e',
+    cursor: 'not-allowed',
   },
 }
 

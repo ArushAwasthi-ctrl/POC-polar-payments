@@ -1,29 +1,11 @@
-// src/billing/billing.webhooks.ts
-// ================================
-// This file handles incoming webhooks from Polar.
-//
-// WHAT IS A WEBHOOK?
-// ------------------
-// When something happens in Polar (user subscribes, cancels, payment fails),
-// Polar needs to tell YOUR server about it. But Polar can't access your database.
-//
-// Solution: Polar sends an HTTP POST request to YOUR server with event details.
-// This is called a "webhook" - it's like Polar "calling you back" when something happens.
-//
-// WHY NOT JUST TRUST THE REDIRECT?
-// --------------------------------
-// After payment, Polar redirects user to your success page. But:
-// 1. User could manually type that URL → fake "success"
-// 2. Network could fail before redirect → user paid but you don't know
-// 3. User could close browser → payment happened but no redirect
-//
-// WEBHOOKS ARE THE ONLY SOURCE OF TRUTH for subscription state.
+
 
 import { Hono } from "hono";
 import { validateEvent, WebhookVerificationError } from "@polar-sh/sdk/webhooks";
 import {
   onSubscriptionActive,
   onSubscriptionCanceled,
+  recordPurchase,
 } from "./billing.service.js";
 
 export const billingWebhooks = new Hono();
@@ -112,8 +94,12 @@ billingWebhooks.post("/api/webhooks/polar", async (c) => {
       console.log("  Status:", event.data.status);
 
       // Call our billing service to handle the activation
-      // In a real app, this would update the database
-      onSubscriptionActive(event.data.customerId);
+      // Pass productId and subscriptionId to record the purchase
+      onSubscriptionActive(
+        event.data.customerId,
+        event.data.productId,
+        event.data.id
+      );
       break;
 
     case "subscription.canceled":
@@ -171,9 +157,20 @@ billingWebhooks.post("/api/webhooks/polar", async (c) => {
       break;
 
     case "order.paid":
+      // One-time purchase completed - record it
       console.log("[WEBHOOK] Order paid!");
       console.log("  Order ID:", event.data.id);
       console.log("  Customer ID:", event.data.customerId);
+      console.log("  Product ID:", event.data.productId);
+
+      // Record the purchase for one-time orders
+      if (event.data.customerId && event.data.productId) {
+        recordPurchase(
+          event.data.customerId,
+          event.data.productId,
+          event.data.id
+        );
+      }
       break;
 
     // ============================================
